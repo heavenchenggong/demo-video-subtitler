@@ -12,11 +12,13 @@ description: |
   frame-level verification. Also covers the traps that silently break this workflow: -ss placed
   before -i kills the ass filter, downscaled preview frames give wrong crop coordinates,
   single-layer ASS cannot render a glow, and captions that straddle scene transitions.
-version: 1.0.1
-slug: demo-video-subtitler
-displayName: Demo Video Subtitler
-summary: Analyse a screen-recorded demo, author readable captions, style them (white text + coloured outline + halo) and burn them in with focus-aware placement that never covers the demo panel.
 license: MIT
+allowed-tools: Bash(${CLAUDE_SKILL_DIR}/scripts/*) Bash(ffmpeg:*) Bash(python3:*) Bash(chmod:*) Read Write Glob Grep
+metadata:
+  version: 1.0.2
+  slug: demo-video-subtitler
+  displayName: Demo Video Subtitler
+  summary: Analyse a screen-recorded demo, author readable captions, style them (white text + coloured outline + halo), and burn them in with focus-aware placement that never covers the demo panel.
 ---
 
 # Demo Video Subtitler
@@ -341,6 +343,24 @@ never by retyping.
 - ffmpeg subtitle filters (`ass`, `subtitles`): https://ffmpeg.org/ffmpeg-filters.html#Subtitles
 - ffmpeg seeking and timestamp behaviour: https://trac.ffmpeg.org/wiki/Seeking
 
+## Harness notes (WorkBuddy vs Claude Code)
+
+The pipeline is harness-agnostic; only how a script path resolves differs.
+
+| Harness | Install path | Calling scripts |
+|---|---|---|
+| WorkBuddy | `~/.workbuddy/skills/demo-video-subtitler/` | `scripts/burn.sh ...` (resolved against the skill directory) |
+| Claude Code | `~/.claude/skills/demo-video-subtitler/` | `${CLAUDE_SKILL_DIR}/scripts/burn.sh ...` — the shell CWD moves when the agent runs `cd`, so a bare relative path can drift |
+
+The `allowed-tools` entry in this file's frontmatter pre-approves `${CLAUDE_SKILL_DIR}/scripts/*`
+plus `ffmpeg`, `python3` and `chmod`, so Claude Code runs the bundled scripts without a permission
+prompt on every call. Other harnesses ignore that field.
+
+Frontmatter portability: only `name`, `description`, `license`, `compatibility`, `metadata` and
+`allowed-tools` are accepted outside Claude Code (claude.ai upload, Skills API, packaging tools) —
+anything else is a **hard error** there, silently ignored in Claude Code. That is why `version`,
+`slug`, `displayName` and `summary` live under `metadata:` rather than at the top level.
+
 ## Sharing / install
 
 This skill is self-contained: `SKILL.md`, `assets/caption-template.ass`, and seven scripts
@@ -348,8 +368,9 @@ This skill is self-contained: `SKILL.md`, `assets/caption-template.ass`, and sev
 
 - **WorkBuddy**: copy the folder to `~/.workbuddy/skills/demo-video-subtitler/`
   (project-scoped alternative: `<repo>/.workbuddy/skills/`).
-- **Claude Code**: copy to `~/.claude/skills/demo-video-subtitler/` and make the scripts
-  executable (`chmod +x scripts/*.sh scripts/*.py`).
+- **Claude Code**: copy to `~/.claude/skills/demo-video-subtitler/`, then
+  `chmod +x scripts/*.sh scripts/*.py` — a zip unpacked by some tools loses the executable bit,
+  and every script fails with "permission denied" until it is restored.
 - Requirements on the receiving machine: `ffmpeg` built with libass + fontconfig, and at least
   one CJK font fontconfig can resolve. Everything else is bash + python3 standard library.
 - Pack for distribution: `cd ~/.workbuddy/skills && zip -r demo-video-subtitler.zip demo-video-subtitler -x '*.DS_Store'`
