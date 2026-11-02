@@ -1,0 +1,31 @@
+[Script Info]
+; Caption template — two-layer "white text + coloured outline + soft halo".
+; COPY this file and change, in order:
+;   1. PlayResX / PlayResY  -> the OUTPUT resolution (e.g. 3840x2160 or 1920x1080)
+;   2. Fontsize             -> ~8.3% of PlayResY  (180 @2160p, 80 @1080p)
+;   3. Outline widths       -> Main.Outline ~ fontsize/11, Halo.Outline ~ fontsize/6.4
+;   4. OutlineColour        -> &HAABBGGRR  (alpha: 00 opaque .. FF transparent; byte order BGR)
+;   5. {\blurN} in Halo events -> ~ fontsize/7.5  (24 @2160p, 12 @1080p)
+; Then write one Halo event (Layer 0) and one Main event (Layer 1) per cue, same timings.
+;
+; Placement anchors (\pos is in PlayRes pixels):
+;   panel open, hug its left edge   -> {\an6\pos(<panel_left-40>, <panel_middle_y>)}
+;   below a top-right toast         -> {\an3\pos(<toast_right>, <toast_bottom+80>)}
+;   full-width page, measured gap   -> {\an5\pos(<center_x>, <gap_y>)}
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+ScaledBorderAndShadow: yes
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Main,Hiragino Sans GB,80,&H00FFFFFF,&H00FFFFFF,&H00F02E7C,&H00000000,-1,0,0,0,100,100,1,0,1,7,0,2,60,60,60,1
+Style: Halo,Hiragino Sans GB,80,&HFF000000,&HFF000000,&H55F02E7C,&H00000000,-1,0,0,0,100,100,1,0,1,12,0,2,60,60,60,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+
+; --- example cue: both layers share timings; /N is a hard line break ---
+Dialogue: 0,0:00:01.00,0:00:04.20,Halo,,0,0,0,,{\blur12\an6\pos(1150,690)}First line of the cue,\Nsecond line here.
+Dialogue: 1,0:00:01.00,0:00:04.20,Main,,0,0,0,,{\an6\pos(1150,690)}First line of the cue,\Nsecond line here.
