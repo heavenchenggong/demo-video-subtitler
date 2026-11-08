@@ -15,10 +15,10 @@ description: |
 license: MIT
 allowed-tools: Bash(${CLAUDE_SKILL_DIR}/scripts/*) Bash(ffmpeg:*) Bash(python3:*) Bash(chmod:*) Read Write Glob Grep
 metadata:
-  version: 1.0.2
+  version: 1.1.0
   slug: demo-video-subtitler
   displayName: Demo Video Subtitler
-  summary: Analyse a screen-recorded demo, author readable captions, style them (white text + coloured outline + halo), and burn them in with focus-aware placement that never covers the demo panel.
+  summary: Analyse a screen-recorded demo, author readable captions, style them (white text + coloured outline + halo), and burn them in with focus-aware placement that never covers the demo panel. v1.1.0 adds timing calibration (Phase 2.5), music-hallucination classification, and eight production traps from a 40-video batch.
 ---
 
 # Demo Video Subtitler
@@ -110,6 +110,11 @@ Decision from the audio check:
 | Audio present but no speech (music only) | Same as above. Confirm by transcribing a 10s slice: an ASR tool that returns empty or near-empty on loud audio means music, not voice |
 | Speech present | **Dialogue subtitles** — transcribe with timestamps first, then clean up; do not invent copy |
 
+Music-only confirmation, done right: ASR hallucinates on music ("Come To" loops, "Thank you.").
+Transcribe a 20s mid-video slice and classify by word count and unique-word ratio — fewer than
+40 words, or unique/total < 0.35, means music, not narration. Loud audio (mean −11 dB) with a
+near-empty transcript is still music. Never classify from the raw transcript alone.
+
 ### Phase 2 — Visual analysis and geometry (the phase people skip)
 
 Extract frames at 2 fps (a 60s clip → ~120 frames; review every 4th frame first for the arc, then
@@ -142,6 +147,24 @@ Build three artifacts before writing a single caption:
 
 **Rule that follows from the geometry map:** the caption lives in the *free region adjacent to*
 the demo panel, never on top of it. See Phase 5.
+
+### Phase 2.5 — Timing calibration (mandatory for screen recordings)
+
+Cue times estimated from frame-sequence numbers run AHEAD of the actual UI actions — observed
+drift up to +9.5s on loading-heavy demos (a cue said "back in the profile" at 60s; the profile
+appeared at 67.4s). Loading periods, slow scrolling and transitions all push real actions later
+than the frame index suggests. Before burning, re-measure:
+
+1. Extract frames at 2 fps and walk the timeline; pin the actual moment of every action a cue
+   references: button appears, panel expands, page switches, reply finishes rendering.
+2. Re-allocate cue times to the measured moments. A cue may lead its action by ≤ 0.5s (standard
+   subtitle lead); anything more is drift. Long static states (AI generation, list scrolling) are
+   ONE long cue, not several.
+3. Edited demos contain jump cuts — one cut skipped an entire intermediate exchange at 82→83s.
+   Never assume continuity between adjacent frames.
+4. Verify "caption and referenced action in the same frame" — with OUTPUT seeking:
+   `ffmpeg -i OUT.mp4 -ss t -frames:v 1`. Input seeking (`-ss t -i`) lands up to ~2s stale on a
+   re-encoded file and once caused a false re-timing.
 
 ### Phase 3 — Author the caption copy
 
@@ -310,6 +333,28 @@ from the **finished** file (subtitles are baked, quality is final) and confirm a
 9. **Keep the source audio decision explicit.** Silent-in, silent-out is fine; but if the source
    has background music, say whether the deliverable keeps it. Presenting live with music under
    your voice is a common accident.
+10. **Cue times from frame-sequence estimates run ahead of the UI.** Observed +9.5s on a
+    loading-heavy demo. Re-measure every referenced action at 2 fps (Phase 2.5) before burning,
+    and confirm "caption and action in the same frame" afterwards.
+11. **Whisper hallucinates on music-only audio.** "Come To" loops, "Thank you." on silent demos.
+    Classify by word count + unique-word ratio (< 0.35 → music), never by the raw transcript.
+12. **Numbers quoted from the screen get misread.** USG10001 vs US010001 (G/0); "3/5" vs "3/3".
+    Crop-zoom and read character-by-character, and cross-check the arithmetic — one demo's own
+    on-screen text was internally inconsistent (3−1 ≠ a "4-point spread"; the case-detail value
+    was the correct one).
+13. **Verify frames need output seeking.** `ffmpeg -i OUT.mp4 -ss t`; input seeking (`-ss t -i`)
+    showed ~2s-stale frames on a re-encoded output and nearly triggered a wrong re-timing.
+14. **One PlayRes design space fits every frame size.** A 1600×900 PlayRes scaled cleanly to
+    1600×900, 1920×1080, 1912×944 and 1280×720 sources. Confirm the source resolution, keep the
+    coordinates.
+15. **Line width must fit the reserved zone.** width ≈ chars × fontsize: an 8-char line at
+    fontsize 76 is 608 px — clipped at the frame edge when the free zone is 460 px. Re-wrap to
+    ≤ zone/fontsize chars per line and re-check on a verify frame.
+16. **Kinetic-typography brand films.** The caption is the translation of the on-screen text:
+    below full-screen centered lines, beside left-side lines — never over the demo device.
+17. **Text-style PrimaryColour is the white fill** (&H00FFFFFF). Filling it with the outline
+    colour renders purple blobs — invisible in the .ass, obvious on a verify frame. Always
+    generate styles from a checked template, never hand-type colour triples twice.
 
 ## Companion use: presenter script
 
@@ -321,6 +366,8 @@ never by retyping.
 ## Verification checklist
 
 - [ ] Every cue's text appears on screen at the intended time in the **finished** file
+- [ ] Caption and the UI action it describes appear in the **same frame** (checked with output seeking)
+- [ ] Numbers quoted from the screen read character-by-character from a crop-zoomed frame
 - [ ] No cue overlaps the demo panel or runs off-frame
 - [ ] No cue crosses a transition
 - [ ] Densest cue ≤ 5.5 CJK chars/s (or ≤ 18 Latin chars/s)
