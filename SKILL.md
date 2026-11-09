@@ -15,10 +15,10 @@ description: |
 license: MIT
 allowed-tools: Bash(${CLAUDE_SKILL_DIR}/scripts/*) Bash(ffmpeg:*) Bash(python3:*) Bash(chmod:*) Read Write Glob Grep
 metadata:
-  version: 1.1.0
+  version: 1.2.0
   slug: demo-video-subtitler
   displayName: Demo Video Subtitler
-  summary: Analyse a screen-recorded demo, author readable captions, style them (white text + coloured outline + halo), and burn them in with focus-aware placement that never covers the demo panel. v1.1.0 adds timing calibration (Phase 2.5), music-hallucination classification, and eight production traps from a 40-video batch.
+  summary: Analyse a screen-recorded demo, author readable captions, style them (white text + coloured outline + halo), and burn them in with focus-aware placement that never covers the demo panel. v1.2.0 adds action-timeline calibration for chat/agent UIs (the accumulating-viewport trap), batch mode for 10+ video sets, and delivery into an offline site.
 ---
 
 # Demo Video Subtitler
@@ -42,6 +42,10 @@ discovered the hard way.
 - An English-only product demo being shown to a non-English audience
 - Subtitles already exist but sit centered-bottom and cover the demo panel — needing
   focus-following placement instead
+- A series of 10–40 demo videos that all need the same treatment before a booth, an event, or an
+  offline hand-off (see "Batch mode")
+- Videos must play in a place with unreliable network, so an offline mirror needs hard subtitles
+  (see "Phase 8 — Delivery")
 - Generating a reading script for a presenter who will talk over the video (see "Companion use")
 
 Do **not** use this skill for: dubbing with synthesized voice (that is a TTS pipeline), or
@@ -76,7 +80,8 @@ What it checks, and the install command when something is missing:
 | `ffmpeg` **built with libass** | burns the `.ass` captions (`-vf ass=...`) | macOS `brew install ffmpeg`; Windows: gyan.dev **full** build; Debian `apt install ffmpeg` |
 | `--enable-fontconfig` in the ffmpeg build | resolves fonts by family name; without it you get a silent fallback face | same builds as above include it |
 | a CJK font family the system can resolve | the caption text itself | macOS: Hiragino Sans GB (pre-installed) · Windows: Microsoft YaHei (pre-installed) · Linux: `apt install fonts-noto-cjk` |
-| `python3` (optional) | only `export_cues.py`; standard library, **no pip installs** | macOS: `xcode-select --install`; Linux: `apt install python3` |
+| `python3` (optional) | `export_cues.py`, `md_to_ass.py`, `audit_actions.py`; standard library, **no pip installs** | macOS: `xcode-select --install`; Linux: `apt install python3` |
+| `swiftc` (optional, macOS) | compiles `ocr_box.swift` so `audit_actions.py` can read text *with coordinates* — the coordinate step is what separates the operator's bubble from the assistant's reply | `xcode-select --install` |
 | `bash`, `zip` (optional) | scripts, and packaging for distribution | pre-installed everywhere |
 
 No Node, no ImageMagick, no pip packages, no API keys. A vision-capable model (the agent itself)
@@ -150,21 +155,76 @@ the demo panel, never on top of it. See Phase 5.
 
 ### Phase 2.5 — Timing calibration (mandatory for screen recordings)
 
-Cue times estimated from frame-sequence numbers run AHEAD of the actual UI actions — observed
-drift up to +9.5s on loading-heavy demos (a cue said "back in the profile" at 60s; the profile
-appeared at 67.4s). Loading periods, slow scrolling and transitions all push real actions later
-than the frame index suggests. Before burning, re-measure:
+Cue times estimated from frame-sequence numbers do not survive contact with a real recording — and
+they can fail in **two opposite directions**. Diagnose which one you have before moving anything:
 
-1. Extract frames at 2 fps and walk the timeline; pin the actual moment of every action a cue
-   references: button appears, panel expands, page switches, reply finishes rendering.
-2. Re-allocate cue times to the measured moments. A cue may lead its action by ≤ 0.5s (standard
-   subtitle lead); anything more is drift. Long static states (AI generation, list scrolling) are
-   ONE long cue, not several.
-3. Edited demos contain jump cuts — one cut skipped an entire intermediate exchange at 82→83s.
-   Never assume continuity between adjacent frames.
-4. Verify "caption and referenced action in the same frame" — with OUTPUT seeking:
-   `ffmpeg -i OUT.mp4 -ss t -frames:v 1`. Input seeking (`-ss t -i`) lands up to ~2s stale on a
-   re-encoded file and once caused a false re-timing.
+| Symptom | Cause | Fix |
+|---|---|---|
+| Captions run **AHEAD** (+2 … +9.5 s) | frame index drifts on loading-heavy, slow-scrolling, jump-cut demos; a cue says "back in the profile" at 60 s while the profile lands at 67.4 s | re-measure each referenced action and pull the cue back |
+| Captions run **BEHIND** (−2 … −8 s) | timed from "when the text appeared on screen", or a previous pass shifted everything later | rebuild the action timeline and push the cue forward |
+
+Do not assume drift and re-align blindly. One 38-video batch was "corrected" under the assumption
+of drift and came out 3–8 s **late** on eight videos; the source copy had been right all along. The
+direction is a measurement, not a style choice.
+
+Four steps:
+
+1. **Build an action timeline from the video, not a keyword map.** Extract frames at 1 fps and read
+   every frame's text *with coordinates* — `scripts/audit_actions.py` does this and writes a
+   per-video report. In a chat UI the coordinates are what separate the operator's bubble (right
+   side, `cx > 0.62`) from the assistant's answer (left side).
+2. **Re-allocate cues to the action moments.** A cue may lead its action by ≤ 0.5 s (standard
+   subtitle lead); anything more is drift, anything that *trails* it is lag.
+3. **Long static states are ONE long cue.** AI generation, list scrolling, a form filling itself —
+   do not slice them into a timeline of fragments.
+4. **Verify "caption and referenced action in the same frame"** on the burned file, with OUTPUT
+   seeking: `ffmpeg -i OUT.mp4 -ss t -frames:v 1`. Input seeking (`-ss t -i`) lands up to ~2 s
+   stale on a re-encoded output and once caused a false re-timing.
+
+Edited demos contain jump cuts — one cut skipped an entire intermediate exchange at 82→83 s. Never
+assume continuity between adjacent frames.
+
+#### Chat / assistant UIs: the accumulating-viewport trap
+
+This is the single most expensive timing mistake in agent demos (Joule, Copilot, any agent
+console), and it cost three successive mis-calibrations on one batch.
+
+**The viewport accumulates.** The conversation scrolls but never clears, so a sentence spoken at
+t=12 is still on screen at t=40. Worse, a long answer card paints its *later* lines in one go. Two
+consequences:
+
+- **"OCR found this keyword for the first time at t=X" is not when the action happened.** The text
+  may have been visible for 20 s or appeared all at once.
+- Caption timeline built this way sits still while the operator has already moved two steps ahead.
+  A reviewer put it exactly right: "the user has already picked 2 and your caption is still on the
+  previous content."
+
+**What is reliable** — the bottom-edge focus text, i.e. the last thing in the viewport:
+
+| Signal | Reads as |
+|---|---|
+| Operator bubble appearing on the right | a message was just sent |
+| Composer text growing character by character (`accept and` → `accept and apply`) | typing, seconds before sending |
+| The composer placeholder *disappearing* | typing just started |
+| Processing-state rotation (`Processing your…` → `Finalizing your response` → `Thinking` → `Starting agent request`) | request in flight, then the next turn |
+| A new button (`Add as Successor`, `Submit`) appearing at the bottom | the agent finished answering |
+
+Recipe: `scripts/audit_actions.py --base videos --ocr scripts/ocr.sh clip.mp4`, then read
+`## status changes` top to bottom — each line is a moment you can hang a cue on.
+
+#### When a human reports a specific moment
+
+The person who watched the video is the ground truth; a screenshot outranks any amount of frame
+analysis. Workflow:
+
+1. Get the timestamp (and the screenshot, if offered).
+2. Locate that exact second in your burned file — extract candidate frames and match the
+   screenshot's panel state, rather than trusting the stated second.
+3. Fix **the whole video** with that evidence, not just the one cue: the misalignment is systemic,
+   the reported moment is only its most visible symptom.
+4. Report back with the verification frame from that same second. "Fixed at 0:23, here is what it
+   now shows" ends the loop; "re-timed the timeline" restarts it.
+
 
 ### Phase 3 — Author the caption copy
 
@@ -189,6 +249,17 @@ Cue timing rules:
 
 **Stop here and get the copy signed off.** Text approved → styling. Text rejected after styling
 costs a second render for nothing.
+
+Once the copy is approved, generate the `.ass` instead of typing styles by hand:
+
+```sh
+scripts/md_to_ass.py copy.md subs.ass config.json     # table of cues in, two-layer .ass out
+```
+
+The config carries PlayRes, font, line width, anchors and an optional per-cue `timing` override
+(`null` keeps the copy's time, `[0,0]` drops the cue) — so re-timing after Phase 2.5 is a JSON
+edit plus one command, and the halo/outline/colour triples are never retyped (see trap 17).
+
 
 ### Phase 3b — Choosing the caption language
 
@@ -308,6 +379,33 @@ Check each frame for: text over the demo panel, text off-frame, unexpected line 
 should have ended, halo that turned into mush over a bright background. Then re-extract 3 frames
 from the **finished** file (subtitles are baked, quality is final) and confirm again.
 
+### Phase 8 — Delivery (site, app, or offline bundle)
+
+When the videos are consumed by a page rather than a person, the burn output is not the deliverable
+— the *served* file is.
+
+1. **Do not infer the served path from the disk layout.** Grep the front-end bundle for the asset
+   base instead of guessing: `grep -o 'videos/[^"]*' site/index-*.js`, then look at the variable it
+   is prefixed with. A bundle base of `pod/` means the player requests `site/pod/videos/…` — while
+   copies of the same files may sit in a sibling folder that nothing references. Replacing the
+   wrong copy looks successful and changes nothing on screen.
+2. **Replace in place, keep the filename identical.** Dropping the `_subtitled`/`_字幕版` suffix is
+   the whole point: the page keeps working, no markup changes, and the swap is reversible from the
+   original masters.
+3. **Verify through the server, not the filesystem.** Start it, then confirm the response is media
+   and supports seeking:
+   `curl -sI http://127.0.0.1:PORT/pod/videos/assistants/Name.mp4` → `200`,
+   `Content-Type: video/mp4`, `Accept-Ranges: bytes`. A file on disk proves nothing about what the
+   player receives.
+4. **Extract a burned frame from the deployed copy.** One frame at the timestamp that previously
+   went wrong proves both that the new render is live and that it is correctly timed.
+5. **Leave the gaps visible.** If some videos in the folder have no subtitle version, list which
+   ones instead of silently shipping a mixed set.
+
+The win this unlocks is the reason to do it at all: an offline mirror with burned subtitles needs no
+network, so a booth or a customer site can run the whole demo from a local folder.
+
+
 ## Traps (each one cost real time to find)
 
 1. **`-ss` before `-i` silences the `ass` filter.** Input seeking resets timestamps to zero, so
@@ -355,6 +453,63 @@ from the **finished** file (subtitles are baked, quality is final) and confirm a
 17. **Text-style PrimaryColour is the white fill** (&H00FFFFFF). Filling it with the outline
     colour renders purple blobs — invisible in the .ass, obvious on a verify frame. Always
     generate styles from a checked template, never hand-type colour triples twice.
+18. **VFR sources silently corrupt `fps`-filter analysis frames.** A screen recording with
+    11476 frames over 186 s (30 fps early, ~65 fps late) produced `fps=2` frames whose nominal
+    time drifted up to 8 s ahead of real playback — captions burned 8 s early mid-video.
+    Detect it first: frame count (`-vf showinfo -f null -` + count) vs duration × banner fps;
+    mismatch > ~5 % ⇒ VFR. For VFR, extract analysis frames by **real pts**:
+    `ffmpeg -i IN -vf "select='floor(t/2)>floor(prev_t/2)'" -fps_mode vfr out_%04d.jpg`
+    (one frame per 2 real seconds), and pin boundaries with `select='gte(t,T)*lt(t,T+0.08)'`.
+    Cross-check every phase transition against burned-output seek frames, which are always
+    real-time.
+19. **In an accumulating chat viewport, "text first appeared" is not the action time.** The
+    conversation never clears, and a long answer card paints its later lines all at once, so a
+    keyword can be visible 20 s before or after the click it seems to describe. Three successive
+    re-timing passes failed this way; the proof was a reviewer's screenshot showing the operator
+    already on step 3 while the caption still described step 1. Use the bottom-edge focus text and
+    the right-side bubble (Phase 2.5), never a keyword map.
+20. **Re-aligning in the wrong direction makes it worse.** If the copy was authored against the
+    real video, a "drift correction" can push every cue 3–8 s late. Measure the sign first: compare
+    one known action against its cue before touching the rest.
+21. **A contact sheet is for spotting *where* something changed, never for reading it.** Eight
+    1280×720 frames tiled into one 2560 px image makes UI text and captions illegible — you will
+    "verify" misread text. Crop the panel and scale it up (≥ 700 px wide for one panel) before
+    claiming a frame is checked.
+22. **`ffprobe` may be missing while `ffmpeg` is present** (static builds, minimal PATH). Probe with
+    `ffmpeg -i file 2>&1 | grep -oE '[0-9]{3,4}x[0-9]{3,4}'` and read codec from
+    `grep -o 'Video: [^,]*'`. Do not let a missing probe tool turn into "I could not verify".
+23. **The served asset path is not the disk layout.** A front-end bundle base (`pod/`) can point at
+    a completely different folder from the one you copied into, and duplicated files in a sibling
+    directory make the wrong choice look plausible. Grep the bundle, then confirm over HTTP.
+24. **The composer placeholder is chrome, not content.** "Message HR Service Assistant…" is present
+    in every frame of a chat demo, so it dominates the OCR fingerprint — but its *disappearance* is
+    exactly what marks typing start. Read it as a state change, not as noise to be filtered.
+
+## Batch mode (10+ videos in one series)
+
+A 38-video product series is not 38 hand-crafted jobs; it is one pipeline run 38 times, with the
+per-video differences held in data. Structure it so a re-timing pass costs minutes, not hours:
+
+1. **One config file per video**, never one global config:
+   `cfg_<slug>.json` with `W/H`, font, anchors, `text_col`, `has_title`, `linebreaks`, `timing`.
+   Same style block across the series; only geometry and timing vary.
+2. **Generate all `.ass` from the copy tables in one loop**, then spot-check by eye before burning.
+   A wrong `text_col` in one config silently ships the wrong language column — filter the table
+   for review markers (`⚠`, `►`) and placeholder rows first.
+3. **Patch timings by cue index**, not by editing generated files:
+   `{"Talent_Scouting_Agent": {4: [17.0, 25.8], 5: [26.0, 32.8]}}` → write into each `timing`
+   array → regenerate → burn. This keeps the diff reviewable and reversible.
+4. **Burn serially, verify in labelled sheets.** Burning in parallel looks faster until two jobs
+   contend for the same disk and one silently produces a truncated file. After burning, extract the
+   boundary frames (one frame per changed transition) into a contact sheet with labels, and read it.
+5. **Keep the previous cut until the new one is verified.** Render as `_v2.mp4`, check, then
+   `mv` over the final name — and delete the variant afterwards, or the folder fills with
+   unlabelled near-duplicates that no one can tell apart a week later.
+6. **Report per video, not per batch.** A table of "what was wrong → what it is now" lets the
+   reviewer check the two or three that matter instead of re-watching forty.
+
+The cheap failure mode to avoid: burning all forty, then discovering the style was wrong for all
+forty. Burn two, get approval, then run the rest.
 
 ## Companion use: presenter script
 
@@ -373,6 +528,11 @@ never by retyping.
 - [ ] Densest cue ≤ 5.5 CJK chars/s (or ≤ 18 Latin chars/s)
 - [ ] Halo reads cleanly over both light and dark backgrounds
 - [ ] Duration, resolution and audio track of the output match the intent
+- [ ] Timing calibrated against the **action timeline**, not against when text first appeared
+- [ ] Any moment a reviewer called out is re-checked in the final file at that same second
+- [ ] For a batch: no `_v2` / `_v3` variants left behind, and the folder count matches the source
+- [ ] For a site/app delivery: the served file returns `200` + `video/mp4` and a burned frame was
+      read back from the deployed copy
 
 ## Notes
 
@@ -410,8 +570,25 @@ anything else is a **hard error** there, silently ignored in Claude Code. That i
 
 ## Sharing / install
 
-This skill is self-contained: `SKILL.md`, `assets/caption-template.ass`, and seven scripts
-(`doctor.sh` is the entry point — run it on the target machine first).
+This skill is self-contained: `SKILL.md`, `assets/caption-template.ass`, and these scripts
+(`doctor.sh` is the entry point — run it on the target machine first):
+
+| Script | Role |
+|---|---|
+| `doctor.sh` | environment check (ffmpeg+libass, fontconfig, CJK font) |
+| `bootstrap.sh` | installs what is missing, idempotent |
+| `probe.sh` | duration / resolution / fps / audio inventory |
+| `split_frames.sh` | analysis frame extraction |
+| `find_edge.sh` | panel edge measurement on a strip crop |
+| `burn.sh` | ffmpeg + libass burn-in |
+| `preview_frame.sh` | one still with the `.ass` applied |
+| `export_cues.py` | cue table with reading-speed density |
+| `md_to_ass.py` | copy table → two-layer `.ass` (implements Phases 3–5) |
+| `audit_actions.py` | action timeline from 1 fps OCR (implements Phase 2.5) |
+| `ocr.sh` / `ocr_box.swift` | macOS Vision OCR **with coordinates**, compiled on first use |
+
+Only `ocr.sh` / `ocr_box.swift` and therefore `audit_actions.py --ocr` are macOS-only (they need
+`swiftc` from Xcode command line tools); everything else is platform-neutral.
 
 - **WorkBuddy**: copy the folder to `~/.workbuddy/skills/demo-video-subtitler/`
   (project-scoped alternative: `<repo>/.workbuddy/skills/`).

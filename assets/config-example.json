@@ -1,0 +1,32 @@
+{
+  "_about": "Example config for scripts/md_to_ass.py — 1920x1080 source, Chinese captions. Field docs live in the script docstring and SKILL.md Phase 3-5.",
+
+  "W": 1920,
+  "H": 1080,
+  "font": "Hiragino Sans GB",
+
+  "fs": 78,
+  "tfs": 72,
+  "maxw": 9,
+
+  "body_x": 1770,
+  "body_y": 626,
+  "title_y": 712,
+
+  "text_col": 1,
+  "has_title": true,
+  "body_center": false,
+
+  "linebreaks": {
+    "处理你的工时单请求，读取近两周记录": ["处理你的工时单请求，", "读取近两周记录"]
+  },
+
+  "timing": [
+    [1.0, 3.8],
+    [5.0, 11.5],
+    null,
+    [16.0, 19.5],
+    [22.8, 29.5],
+    []
+  ]
+}
